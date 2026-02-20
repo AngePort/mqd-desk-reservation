@@ -1,9 +1,9 @@
 ## 1. Project Setup
 
-- [ ] 1.1 Select implementation stack consistent with design (UI client + API + relational DB)
-- [ ] 1.2 Scaffold the web application and API structure
-- [ ] 1.3 Add baseline tooling (formatting/linting, env var handling, basic error handling)
-- [ ] 1.4 Add a local development README (run, configure shared credentials)
+- [x] 1.1 Select implementation stack consistent with design (UI client + API + relational DB)
+- [x] 1.2 Scaffold the web application and API structure
+- [x] 1.3 Add baseline tooling (formatting/linting, env var handling, basic error handling)
+- [x] 1.4 Add a local development README (run, configure shared credentials)
 
 ## 2. Persistence & Data Model
 
