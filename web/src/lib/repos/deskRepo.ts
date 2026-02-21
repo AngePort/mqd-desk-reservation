@@ -54,6 +54,13 @@ export const deskRepo = {
     });
   },
 
+  enable(id: string) {
+    return prisma.desk.update({
+      where: { id },
+      data: { enabled: true },
+    });
+  },
+
   delete(id: string) {
     return prisma.desk.delete({
       where: { id },

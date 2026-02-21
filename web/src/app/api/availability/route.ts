@@ -21,7 +21,7 @@ export async function GET(request: Request) {
   }
 
   const desks = await prisma.desk.findMany({
-    where: { layoutId, enabled: true },
+    where: { layoutId },
     orderBy: { label: "asc" },
   });
 
@@ -54,6 +54,7 @@ export async function GET(request: Request) {
     desks: desks.map((d: DeskRow) => ({
       id: d.id,
       label: d.label,
+      enabled: d.enabled,
       x: d.x,
       y: d.y,
       width: d.width,

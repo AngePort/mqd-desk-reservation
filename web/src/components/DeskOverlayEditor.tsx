@@ -15,7 +15,6 @@ export type DeskOverlay = {
 type Props = {
   layoutId: string;
   baseSrc: string;
-  referenceSrc?: string | null;
   initialDesks: DeskOverlay[];
 };
 
@@ -65,9 +64,14 @@ function round4(n: number) {
   return Math.round(n * 10000) / 10000;
 }
 
-function toNormalized(px: number, sizePx: number) {
+function toNormalizedAbs(px: number, sizePx: number) {
   if (sizePx <= 0) return 0;
   return clamp01(px / sizePx);
+}
+
+function toNormalizedDelta(deltaPx: number, sizePx: number) {
+  if (sizePx <= 0) return 0;
+  return deltaPx / sizePx;
 }
 
 function toPx(norm: number, sizePx: number) {
@@ -99,7 +103,6 @@ async function apiPost<T>(url: string, body: unknown): Promise<T> {
 export function DeskOverlayEditor({
   layoutId,
   baseSrc,
-  referenceSrc,
   initialDesks,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -110,7 +113,6 @@ export function DeskOverlayEditor({
 
   const [desks, setDesks] = useState<DeskOverlay[]>(initialDesks);
   const [selectedDeskId, setSelectedDeskId] = useState<string | null>(null);
-  const [showReference, setShowReference] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [drag, setDrag] = useState<DragMode>({ kind: "none" });
 
@@ -183,6 +185,12 @@ export function DeskOverlayEditor({
     setDesks((prev) => prev.map((d) => (d.id === deskId ? updated.desk : d)));
   }
 
+  async function enableDesk(deskId: string) {
+    setStatus(null);
+    const updated = await apiPost<{ desk: DeskOverlay }>("/api/admin/desks/enable", { deskId });
+    setDesks((prev) => prev.map((d) => (d.id === deskId ? updated.desk : d)));
+  }
+
   async function deleteDesk(deskId: string) {
     setStatus(null);
     await apiPost<{ ok: true }>("/api/admin/desks/delete", { deskId });
@@ -202,8 +210,8 @@ export function DeskOverlayEditor({
     if (target?.closest?.('[data-desk-overlay="true"]')) return;
 
     const pos = getPointerPos(e, bounds);
-    const normX = toNormalized(pos.x, bounds.width);
-    const normY = toNormalized(pos.y, bounds.height);
+    const normX = toNormalizedAbs(pos.x, bounds.width);
+    const normY = toNormalizedAbs(pos.y, bounds.height);
 
     void createDeskAt(normX, normY).catch((err) => {
       setStatus(err instanceof Error ? err.message : "Failed to create desk");
@@ -254,8 +262,9 @@ export function DeskOverlayEditor({
         y: pending.y - bounds.top,
       };
 
-      const dxNorm = toNormalized(pos.x - drag.startX, bounds.width);
-      const dyNorm = toNormalized(pos.y - drag.startY, bounds.height);
+      // IMPORTANT: deltas must NOT be clamped; users need to move left/up and resize from any corner.
+      const dxNorm = toNormalizedDelta(pos.x - drag.startX, bounds.width);
+      const dyNorm = toNormalizedDelta(pos.y - drag.startY, bounds.height);
 
       setDesks((prev) =>
         prev.map((d) => {
@@ -318,20 +327,6 @@ export function DeskOverlayEditor({
   return (
     <section className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2">
-          <input
-            id="show-reference"
-            type="checkbox"
-            className="h-4 w-4"
-            checked={showReference}
-            onChange={(e) => setShowReference(e.target.checked)}
-            disabled={!referenceSrc}
-          />
-          <label htmlFor="show-reference" className="text-sm">
-            Show desk highlight overlay
-          </label>
-        </div>
-
         <p className="text-sm text-slate-600">Click the map to add a desk. Drag to move. Drag a corner to resize.</p>
       </div>
 
@@ -353,15 +348,6 @@ export function DeskOverlayEditor({
               draggable={false}
             />
 
-            {referenceSrc && showReference ? (
-              <img
-                src={referenceSrc}
-                alt="Desk highlight overlay"
-                className="pointer-events-none absolute inset-0 h-auto w-full opacity-50"
-                draggable={false}
-              />
-            ) : null}
-
             {desks.map((d) => {
               const isSelected = d.id === selectedDeskId;
               const isEnabled = d.enabled;
@@ -376,8 +362,8 @@ export function DeskOverlayEditor({
                   key={d.id}
                   data-desk-overlay="true"
                   className={`absolute border text-[10px] ${
-                    isSelected ? "border-black" : "border-slate-700"
-                  } ${isEnabled ? "bg-white/30" : "bg-slate-400/30"}`}
+                    isSelected ? "border-black" : isEnabled ? "border-slate-700" : "border-yellow-700"
+                  } ${isEnabled ? "bg-white/30" : "bg-yellow-300/40"}`}
                   style={{ left, top, width, height }}
                   onPointerDown={(e) => startMove(e, d)}
                 >
@@ -417,7 +403,11 @@ export function DeskOverlayEditor({
           <SelectedDeskForm
             desk={selectedDesk}
             onChange={(next) => setDesks((prev) => prev.map((d) => (d.id === next.id ? next : d)))}
-            onDisable={() => void disableDesk(selectedDesk.id).catch((err) => setStatus(String(err)))}
+            onToggleEnabled={() =>
+              void (selectedDesk.enabled ? disableDesk(selectedDesk.id) : enableDesk(selectedDesk.id)).catch((err) =>
+                setStatus(String(err)),
+              )
+            }
             onDelete={() => void deleteDesk(selectedDesk.id).catch((err) => setStatus(String(err)))}
           />
         ) : (
@@ -480,9 +470,13 @@ export function DeskOverlayEditor({
                             <button
                               type="button"
                               className="rounded border px-2 py-1"
-                              onClick={() => void disableDesk(d.id).catch((err) => setStatus(String(err)))}
+                              onClick={() =>
+                                void (d.enabled ? disableDesk(d.id) : enableDesk(d.id)).catch((err) =>
+                                  setStatus(String(err)),
+                                )
+                              }
                             >
-                              Disable
+                              {d.enabled ? "Disable" : "Enable"}
                             </button>
 
                             <button
@@ -511,12 +505,12 @@ export function DeskOverlayEditor({
 function SelectedDeskForm({
   desk,
   onChange,
-  onDisable,
+  onToggleEnabled,
   onDelete,
 }: {
   desk: DeskOverlay;
   onChange: (next: DeskOverlay) => void;
-  onDisable: () => void;
+  onToggleEnabled: () => void;
   onDelete: () => void;
 }) {
   return (
@@ -541,8 +535,8 @@ function SelectedDeskForm({
       </label>
 
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onDisable}>
-          Disable
+        <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onToggleEnabled}>
+          {desk.enabled ? "Disable" : "Enable"}
         </button>
         <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onDelete}>
           Delete

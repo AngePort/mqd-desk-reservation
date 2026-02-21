@@ -10,7 +10,6 @@ export default async function Home() {
   const layout = await layoutRepo.getCurrent();
 
   const baseSrc = layout?.baseImagePath ?? "/so-office-layout/so-office-layout.png";
-  const referenceSrc = layout?.referenceImagePath ?? "/so-office-layout/so-office-layout-desks.png";
 
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-4 p-6">
@@ -53,7 +52,6 @@ export default async function Home() {
         <ReservationMap
           layoutId={layout.id}
           baseSrc={baseSrc}
-          referenceSrc={referenceSrc}
           currentUser={{ id: user.id, role: user.role, personId: user.personId ?? null }}
         />
       ) : (

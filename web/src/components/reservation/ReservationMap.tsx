@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 type DeskAvailability = {
   id: string;
   label: string;
+  enabled: boolean;
   x: number;
   y: number;
   width: number;
@@ -18,7 +19,6 @@ type PersonOption = { id: string; displayName: string };
 type Props = {
   layoutId: string;
   baseSrc: string;
-  referenceSrc?: string | null;
   currentUser: {
     id: string;
     role: "ADMIN" | "USER";
@@ -88,14 +88,13 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }: Props) {
+export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
   const defaultStart = useMemo(() => nowRoundedToMinutes(), []);
   const defaultEnd = useMemo(() => addHours(defaultStart, 1), [defaultStart]);
 
   const [startAtLocal, setStartAtLocal] = useState(() => toDatetimeLocalValue(defaultStart));
   const [endAtLocal, setEndAtLocal] = useState(() => toDatetimeLocalValue(defaultEnd));
 
-  const [showReference, setShowReference] = useState(Boolean(referenceSrc));
   const [desks, setDesks] = useState<DeskAvailability[]>([]);
   const [people, setPeople] = useState<PersonOption[]>([]);
   const [selectedDeskId, setSelectedDeskId] = useState<string | null>(null);
@@ -156,11 +155,6 @@ export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startAtLocal, endAtLocal]);
 
-  async function onCheckAvailability() {
-    setStatus(null);
-    void refreshAvailability().catch((err) => setStatus(err instanceof Error ? err.message : "Failed to load"));
-  }
-
   function applyDurationMinutes(minutes: number) {
     const start = new Date(startAtLocal);
     if (!Number.isFinite(start.getTime())) return;
@@ -179,6 +173,11 @@ export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }:
   async function onReserve() {
     if (!selectedDesk) return;
     setStatus(null);
+
+    if (!selectedDesk.enabled) {
+      setStatus("That desk is disabled.");
+      return;
+    }
 
     const personId = currentUser.role === "USER" ? currentUser.personId : selectedPersonId;
     if (!personId) {
@@ -225,7 +224,9 @@ export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }:
     const y = (clientY - rect.top) / rect.height;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
-    const hits = desks.filter((d) => x >= d.x && x <= d.x + d.width && y >= d.y && y <= d.y + d.height);
+    const hits = desks.filter(
+      (d) => d.enabled && x >= d.x && x <= d.x + d.width && y >= d.y && y <= d.y + d.height,
+    );
     if (hits.length === 0) return;
 
     // If multiple desks overlap, pick the smallest (most specific) hit.
@@ -258,22 +259,8 @@ export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }:
             />
           </label>
 
-          <button type="button" className="h-10 rounded border px-3 text-sm" onClick={onCheckAvailability}>
-            Check availability
-          </button>
-
           <div className="flex items-center gap-2">
-            <input
-              id="show-reference"
-              type="checkbox"
-              className="h-4 w-4"
-              checked={showReference}
-              onChange={(e) => setShowReference(e.target.checked)}
-              disabled={!referenceSrc}
-            />
-            <label htmlFor="show-reference" className="text-sm">
-              Show desk highlight overlay
-            </label>
+            <span className="text-sm text-slate-600">Tip: green = available, red = reserved, yellow = disabled</span>
           </div>
         </div>
 
@@ -320,15 +307,6 @@ export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }:
           >
             <img src={baseSrc} alt="Office layout" className="block h-auto w-full" draggable={false} />
 
-            {referenceSrc && showReference ? (
-              <img
-                src={referenceSrc}
-                alt="Desk highlight overlay"
-                className="pointer-events-none absolute inset-0 h-auto w-full opacity-50"
-                draggable={false}
-              />
-            ) : null}
-
             {desks.map((d) => {
               const isSelected = d.id === selectedDeskId;
               const isHovered = d.id === hoveredDeskId;
@@ -337,27 +315,43 @@ export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }:
               const width = `${d.width * 100}%`;
               const height = `${d.height * 100}%`;
 
-              const title = d.reserved && d.reservation
-                ? `${d.label} — Reserved by ${d.reservation.personName} until ${formatLocal(d.reservation.endAt)}`
-                : `${d.label} — Available`;
+              const title = !d.enabled
+                ? `${d.label} — Disabled`
+                : d.reserved && d.reservation
+                  ? `${d.label} — Reserved by ${d.reservation.personName} until ${formatLocal(d.reservation.endAt)}`
+                  : `${d.label} — Available`;
+
+              const deskColors = !d.enabled
+                ? "border-yellow-700 bg-yellow-300/40"
+                : d.reserved
+                  ? "border-red-700 bg-red-500/40"
+                  : "border-green-700 bg-green-500/35";
 
               return (
                 <button
                   key={d.id}
                   type="button"
                   title={title}
-                  className={`absolute border text-left text-[10px] ${
-                    d.reserved ? "border-red-700 bg-red-500/40" : "border-green-700 bg-green-500/35"
-                  } cursor-pointer hover:z-20 hover:outline hover:outline-2 hover:outline-slate-900 ${
-                    isHovered ? "z-20 outline outline-2 outline-slate-900" : "z-10"
-                  } ${isSelected ? "outline outline-2 outline-black" : ""}`}
+                  className={`absolute border text-left text-[10px] ${deskColors} ${
+                    d.enabled ? "cursor-pointer" : "cursor-not-allowed"
+                  } ${
+                    d.enabled
+                      ? "hover:z-20 hover:outline hover:outline-2 hover:outline-slate-900"
+                      : ""
+                  } ${isHovered ? "z-20 outline outline-2 outline-slate-900" : "z-10"} ${
+                    isSelected ? "outline outline-2 outline-black" : ""
+                  }`}
                   style={{ left, top, width, height }}
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (!d.enabled) return;
                     setSelectedDeskId(d.id);
                     setStatus(null);
                   }}
-                  onMouseEnter={() => setHoveredDeskId(d.id)}
+                  onMouseEnter={() => {
+                    if (!d.enabled) return;
+                    setHoveredDeskId(d.id);
+                  }}
                   onMouseLeave={() => setHoveredDeskId((cur) => (cur === d.id ? null : cur))}
                 >
                   <div className="truncate p-1">{d.label}</div>
@@ -377,15 +371,19 @@ export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }:
               Desk: <span className="font-medium text-slate-900">{selectedDesk.label}</span>
             </p>
 
-            {selectedDesk.reserved && selectedDesk.reservation ? (
+            {!selectedDesk.enabled ? (
+              <p className="text-sm text-slate-600">Disabled</p>
+            ) : null}
+
+            {selectedDesk.enabled && selectedDesk.reserved && selectedDesk.reservation ? (
               <p className="text-sm text-slate-600">
                 Reserved by {selectedDesk.reservation.personName} until {formatLocal(selectedDesk.reservation.endAt)}
               </p>
-            ) : (
+            ) : selectedDesk.enabled ? (
               <p className="text-sm text-slate-600">Available</p>
-            )}
+            ) : null}
 
-            {selectedDesk.reserved ? (
+            {selectedDesk.enabled && selectedDesk.reserved ? (
               currentUser.role === "ADMIN" && selectedDesk.reservation ? (
                 <button type="button" className="w-fit rounded border px-3 py-2 text-sm" onClick={onAdminCancel}>
                   Cancel reservation
@@ -393,7 +391,7 @@ export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }:
               ) : (
                 <p className="text-xs text-slate-600">Only admins can cancel reservations in the MVP.</p>
               )
-            ) : (
+            ) : selectedDesk.enabled ? (
               <>
                 {currentUser.role === "ADMIN" ? (
                   <label className="grid gap-1">
@@ -418,7 +416,7 @@ export function ReservationMap({ layoutId, baseSrc, referenceSrc, currentUser }:
                   Reserve desk
                 </button>
               </>
-            )}
+            ) : null}
           </>
         ) : (
           <p className="text-sm text-slate-600">Click a desk on the map to reserve it.</p>

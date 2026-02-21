@@ -55,7 +55,6 @@ export default async function AdminDesksPage() {
       <DeskOverlayEditor
         layoutId={layout.id}
         baseSrc={layout.baseImagePath}
-        referenceSrc={layout.referenceImagePath}
         initialDesks={desks.map((d: DeskRow) => ({
           id: d.id,
           label: d.label,

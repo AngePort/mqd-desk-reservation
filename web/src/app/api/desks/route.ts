@@ -15,7 +15,7 @@ export async function GET(request: Request) {
   }
 
   const desks = await prisma.desk.findMany({
-    where: { layoutId, enabled: true },
+    where: { layoutId },
     orderBy: { label: "asc" },
   });
 
