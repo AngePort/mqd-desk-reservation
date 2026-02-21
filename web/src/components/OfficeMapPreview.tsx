@@ -23,7 +23,7 @@ export function OfficeMapPreview({ baseSrc, referenceSrc }: OfficeMapPreviewProp
           disabled={!referenceSrc}
         />
         <label htmlFor="show-reference" className="text-sm">
-          Show original layout overlay
+          Show desk highlight overlay
         </label>
       </div>
 
@@ -41,7 +41,7 @@ export function OfficeMapPreview({ baseSrc, referenceSrc }: OfficeMapPreviewProp
           {referenceSrc && showReference ? (
             <Image
               src={referenceSrc}
-              alt="Office layout (original overlay)"
+              alt="Office layout (desk highlight overlay)"
               width={1400}
               height={900}
               className="pointer-events-none absolute inset-0 h-auto w-[min(1400px,100%)] select-none opacity-50"

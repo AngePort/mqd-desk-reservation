@@ -8,7 +8,7 @@ Key constraints from the proposal:
 - Interactive office map with clickable/tappable desks.
 - Reservation creation includes selecting a person from an office personnel dropdown and selecting a start/end time (years → minutes).
 - Reserved desks are shown in red and display the reserver’s name on hover/click.
-- MVP authentication is a single shared account with full permissions; Admin/User role split is post-MVP.
+- Authentication uses secure per-user accounts with Admin and User roles.
 
 ## Goals / Non-Goals
 
@@ -17,12 +17,13 @@ Key constraints from the proposal:
 - Provide an admin workflow to create/edit/delete desk locations anchored on the layout.
 - Provide reservation CRUD with correct conflict detection per desk/time range.
 - Persist office layout(s), desk definitions, personnel list, and reservations.
-- Implement MVP authentication as a single shared login with full permissions.
+- Implement authentication with secure password hashing and session management.
+- Support Admin and User roles, where Admins can manage desks and reservations and create/manage user accounts.
 - Keep the data model and API boundaries compatible with a future Admin/User split.
 
 **Non-Goals:**
-- Implementing end-user self-service accounts in the MVP (unique user logins).
-- Enforcing post-MVP user restrictions (self-only reservations, one active reservation per user, user cannot cancel).
+- Self-signup or email verification flows.
+- Email-based password reset flows.
 - Advanced map features (multi-floor navigation, zoom/pan polish beyond basic usability, automatic desk detection from images).
 - Integrations (SSO, HR directories, calendar sync).
 
@@ -67,22 +68,25 @@ Admins then create desks by clicking/dragging on the map to place/edit desk rect
 **Alternatives considered:**
 - Fixed time slots: rejected because the requirement calls for arbitrary time ranges.
 
-### Identity model: personnel directory separate from authentication
-**Decision:** Maintain a `Personnel` directory used for reservations and display, separate from the authentication mechanism.
+### Identity model: users linked to personnel directory
+**Decision:** Maintain a `Personnel` directory used for reservations and display, and link each authenticated User account to a `personId`.
 
-- MVP: authenticated session represents the shared admin-style operator.
-- Reservations reference a `personId` (from the directory).
+- Reservations reference a `personId`.
+- For User role, the reservation person MUST match the authenticated user’s linked `personId`.
 
-**Rationale:** Keeps reservations tied to real people even before implementing per-user accounts; enables future user accounts to be linked to personnel records.
+**Rationale:** Keeps reservations tied to real people and provides a straightforward way to enforce “self-only” reservation rules.
 
-### Authorization: MVP “all permissions”, future RBAC
-**Decision:** Implement a single authenticated role with full permissions for MVP. Keep API endpoints structured such that it’s straightforward to add authorization gates later (e.g., admin-only desk management, user-only “reserve for self”).
+### Authorization: role-based access control (RBAC)
+**Decision:** Implement Admin and User roles with explicit authorization gates:
 
-**Rationale:** Matches the requested short-term simplification without blocking future Admin/User role support.
+- Admin-only: desk management, user management, reservation override/edit/delete.
+- User: reserve for self, view map and availability.
+
+**Rationale:** Enforces the stated booking rules and permissions.
 
 ## Risks / Trade-offs
 
 - [Map alignment errors] Admin may place desk markers inaccurately → Provide snap-to-grid or simple resize handles; store normalized coordinates and offer preview mode.
 - [Time zones and DST] Reservations can appear shifted → Store timestamps in UTC; display in office-local time zone; record the office time zone in settings.
 - [Concurrency] Two operators could reserve the same desk at nearly the same time → Enforce conflicts server-side and return a clear “desk already reserved” error on race.
-- [Future RBAC constraints] Post-MVP self-only rules might require additional account data → Ensure `Reservation` always references `personId`; later link authenticated user to a `personId`.
+- [Account provisioning] Creating users securely without email flows → Admin creates users and sets initial passwords; store only secure password hashes; allow admin reset.

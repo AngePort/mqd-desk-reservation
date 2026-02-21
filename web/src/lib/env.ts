@@ -1,13 +1,22 @@
 import { z } from "zod";
 
 const envSchema = z.object({
-  SHARED_USERNAME: z.string().min(1),
-  SHARED_PASSWORD: z.string().min(1),
-  SESSION_PASSWORD: z.string().min(16),
+  DATABASE_URL: z.string().min(1),
+  // iron-session requires >= 32 chars
+  SESSION_PASSWORD: z
+    .string()
+    .min(32, "SESSION_PASSWORD must be at least 32 characters (see .env.example)"),
 });
 
-export const env = envSchema.parse({
-  SHARED_USERNAME: process.env.SHARED_USERNAME,
-  SHARED_PASSWORD: process.env.SHARED_PASSWORD,
-  SESSION_PASSWORD: process.env.SESSION_PASSWORD,
-});
+let cachedEnv: z.infer<typeof envSchema> | null = null;
+
+export function getEnv() {
+  if (cachedEnv) return cachedEnv;
+
+  cachedEnv = envSchema.parse({
+    DATABASE_URL: process.env.DATABASE_URL,
+    SESSION_PASSWORD: process.env.SESSION_PASSWORD,
+  });
+
+  return cachedEnv;
+}
