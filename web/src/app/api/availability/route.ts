@@ -35,12 +35,17 @@ export async function GET(request: Request) {
     orderBy: { startAt: "asc" },
   });
 
-  const reservedByDeskId: Record<string, { reservationId: string; personName: string }> = {};
+  const reservedByDeskId: Record<
+    string,
+    { reservationId: string; personName: string; startAt: string; endAt: string }
+  > = {};
   for (const r of reservations) {
     if (!reservedByDeskId[r.deskId]) {
       reservedByDeskId[r.deskId] = {
         reservationId: r.id,
         personName: r.person.displayName,
+        startAt: r.startAt.toISOString(),
+        endAt: r.endAt.toISOString(),
       };
     }
   }

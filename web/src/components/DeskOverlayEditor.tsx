@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type DeskOverlay = {
   id: string;
@@ -33,6 +33,32 @@ type DragMode =
 
 function clamp01(n: number) {
   return Math.min(1, Math.max(0, n));
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function normalizeRect(rect: { x: number; y: number; width: number; height: number }) {
+  const minSize = 0.01;
+
+  let width = clamp01(rect.width);
+  let height = clamp01(rect.height);
+  width = Math.max(width, minSize);
+  height = Math.max(height, minSize);
+
+  let x = clamp01(rect.x);
+  let y = clamp01(rect.y);
+
+  // Ensure the rect stays fully in bounds.
+  if (x + width > 1) width = Math.max(minSize, 1 - x);
+  if (y + height > 1) height = Math.max(minSize, 1 - y);
+
+  // If width/height were forced to minSize and don't fit, shift position.
+  x = clamp(x, 0, 1 - width);
+  y = clamp(y, 0, 1 - height);
+
+  return { x, y, width, height };
 }
 
 function round4(n: number) {
@@ -77,6 +103,10 @@ export function DeskOverlayEditor({
   initialDesks,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const desksRef = useRef<DeskOverlay[]>(initialDesks);
+
+  const rafRef = useRef<number | null>(null);
+  const pendingPointRef = useRef<{ x: number; y: number } | null>(null);
 
   const [desks, setDesks] = useState<DeskOverlay[]>(initialDesks);
   const [selectedDeskId, setSelectedDeskId] = useState<string | null>(null);
@@ -89,6 +119,10 @@ export function DeskOverlayEditor({
     [desks, selectedDeskId],
   );
 
+  useEffect(() => {
+    desksRef.current = desks;
+  }, [desks]);
+
   function getBounds() {
     const el = containerRef.current;
     if (!el) return null;
@@ -100,16 +134,20 @@ export function DeskOverlayEditor({
 
     const width = 0.045;
     const height = 0.035;
-    const x = clamp01(normX - width / 2);
-    const y = clamp01(normY - height / 2);
+    const rect = normalizeRect({
+      x: normX - width / 2,
+      y: normY - height / 2,
+      width,
+      height,
+    });
 
     const created = await apiPost<{ desk: DeskOverlay }>("/api/admin/desks/create", {
       layoutId,
       label: `Desk ${desks.length + 1}`,
-      x: round4(x),
-      y: round4(y),
-      width: round4(width),
-      height: round4(height),
+      x: round4(rect.x),
+      y: round4(rect.y),
+      width: round4(rect.width),
+      height: round4(rect.height),
     });
 
     setDesks((prev) => [created.desk, ...prev]);
@@ -119,14 +157,21 @@ export function DeskOverlayEditor({
   async function saveDesk(next: DeskOverlay) {
     setStatus(null);
 
+    const rect = normalizeRect({
+      x: next.x,
+      y: next.y,
+      width: next.width,
+      height: next.height,
+    });
+
     const updated = await apiPost<{ desk: DeskOverlay }>("/api/admin/desks/update", {
       deskId: next.id,
       label: next.label,
       enabled: next.enabled,
-      x: round4(clamp01(next.x)),
-      y: round4(clamp01(next.y)),
-      width: round4(clamp01(next.width)),
-      height: round4(clamp01(next.height)),
+      x: round4(rect.x),
+      y: round4(rect.y),
+      width: round4(rect.width),
+      height: round4(rect.height),
     });
 
     setDesks((prev) => prev.map((d) => (d.id === updated.desk.id ? updated.desk : d)));
@@ -151,8 +196,10 @@ export function DeskOverlayEditor({
     const bounds = getBounds();
     if (!bounds) return;
 
-    // Only handle clicks on the background itself (not on a desk)
-    if (e.target !== e.currentTarget) return;
+    // Only handle clicks that are NOT on a desk overlay.
+    // Note: clicks on the base layout image should still count as background clicks.
+    const target = e.target as HTMLElement | null;
+    if (target?.closest?.('[data-desk-overlay="true"]')) return;
 
     const pos = getPointerPos(e, bounds);
     const normX = toNormalized(pos.x, bounds.width);
@@ -191,60 +238,74 @@ export function DeskOverlayEditor({
 
   function onPointerMove(e: React.PointerEvent) {
     if (drag.kind === "none") return;
-    const bounds = getBounds();
-    if (!bounds) return;
 
-    const pos = getPointerPos(e, bounds);
-    const dxNorm = toNormalized(pos.x - drag.startX, bounds.width);
-    const dyNorm = toNormalized(pos.y - drag.startY, bounds.height);
+    // Throttle updates to ~1/frame to reduce lag.
+    pendingPointRef.current = { x: e.clientX, y: e.clientY };
+    if (rafRef.current !== null) return;
 
-    setDesks((prev) =>
-      prev.map((d) => {
-        if (d.id !== drag.deskId) return d;
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null;
+      const bounds = getBounds();
+      const pending = pendingPointRef.current;
+      if (!bounds || !pending) return;
 
-        if (drag.kind === "move") {
-          const nextX = clamp01(drag.startDesk.x + dxNorm);
-          const nextY = clamp01(drag.startDesk.y + dyNorm);
-          return { ...d, x: nextX, y: nextY };
-        }
+      const pos = {
+        x: pending.x - bounds.left,
+        y: pending.y - bounds.top,
+      };
 
-        const s = drag.startDesk;
-        let x = s.x;
-        let y = s.y;
-        let width = s.width;
-        let height = s.height;
+      const dxNorm = toNormalized(pos.x - drag.startX, bounds.width);
+      const dyNorm = toNormalized(pos.y - drag.startY, bounds.height);
 
-        if (drag.corner === "se") {
-          width = clamp01(s.width + dxNorm);
-          height = clamp01(s.height + dyNorm);
-        } else if (drag.corner === "sw") {
-          x = clamp01(s.x + dxNorm);
-          width = clamp01(s.width - dxNorm);
-          height = clamp01(s.height + dyNorm);
-        } else if (drag.corner === "ne") {
-          y = clamp01(s.y + dyNorm);
-          width = clamp01(s.width + dxNorm);
-          height = clamp01(s.height - dyNorm);
-        } else if (drag.corner === "nw") {
-          x = clamp01(s.x + dxNorm);
-          y = clamp01(s.y + dyNorm);
-          width = clamp01(s.width - dxNorm);
-          height = clamp01(s.height - dyNorm);
-        }
+      setDesks((prev) =>
+        prev.map((d) => {
+          if (d.id !== drag.deskId) return d;
 
-        // Keep minimum size
-        width = Math.max(width, 0.01);
-        height = Math.max(height, 0.01);
+          if (drag.kind === "move") {
+            const nextX = clamp(drag.startDesk.x + dxNorm, 0, 1 - d.width);
+            const nextY = clamp(drag.startDesk.y + dyNorm, 0, 1 - d.height);
+            return { ...d, x: nextX, y: nextY };
+          }
 
-        return { ...d, x, y, width, height };
-      }),
-    );
+          const s = drag.startDesk;
+          let x = s.x;
+          let y = s.y;
+          let width = s.width;
+          let height = s.height;
+
+          if (drag.corner === "se") {
+            width = clamp01(s.width + dxNorm);
+            height = clamp01(s.height + dyNorm);
+          } else if (drag.corner === "sw") {
+            x = clamp01(s.x + dxNorm);
+            width = clamp01(s.width - dxNorm);
+            height = clamp01(s.height + dyNorm);
+          } else if (drag.corner === "ne") {
+            y = clamp01(s.y + dyNorm);
+            width = clamp01(s.width + dxNorm);
+            height = clamp01(s.height - dyNorm);
+          } else if (drag.corner === "nw") {
+            x = clamp01(s.x + dxNorm);
+            y = clamp01(s.y + dyNorm);
+            width = clamp01(s.width - dxNorm);
+            height = clamp01(s.height - dyNorm);
+          }
+
+          // Keep minimum size
+          width = Math.max(width, 0.01);
+          height = Math.max(height, 0.01);
+
+          const rect = normalizeRect({ x, y, width, height });
+          return { ...d, ...rect };
+        }),
+      );
+    });
   }
 
   function onPointerUp() {
     if (drag.kind === "none") return;
 
-    const changedDesk = desks.find((d) => d.id === drag.deskId);
+    const changedDesk = desksRef.current.find((d) => d.id === drag.deskId);
     setDrag({ kind: "none" });
 
     if (!changedDesk) return;
@@ -280,12 +341,17 @@ export function DeskOverlayEditor({
         <div className="relative inline-block">
           <div
             ref={containerRef}
-            className="relative h-auto w-[min(1400px,100%)] select-none"
+            className="relative h-auto w-[min(1400px,100%)] select-none touch-none"
             onPointerDown={onBackgroundPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
           >
-            <img src={baseSrc} alt="Office layout" className="block h-auto w-full" draggable={false} />
+            <img
+              src={baseSrc}
+              alt="Office layout"
+              className="pointer-events-none block h-auto w-full"
+              draggable={false}
+            />
 
             {referenceSrc && showReference ? (
               <img
@@ -308,6 +374,7 @@ export function DeskOverlayEditor({
               return (
                 <div
                   key={d.id}
+                  data-desk-overlay="true"
                   className={`absolute border text-[10px] ${
                     isSelected ? "border-black" : "border-slate-700"
                   } ${isEnabled ? "bg-white/30" : "bg-slate-400/30"}`}
@@ -355,6 +422,84 @@ export function DeskOverlayEditor({
           />
         ) : (
           <p className="text-sm text-slate-600">Click a desk overlay to edit it.</p>
+        )}
+      </div>
+
+      <div className="grid gap-3 rounded border p-4">
+        <div className="flex items-baseline justify-between gap-4">
+          <h3 className="text-lg font-semibold">All desks</h3>
+          <p className="text-xs text-slate-600">{desks.length} total</p>
+        </div>
+
+        {desks.length === 0 ? (
+          <p className="text-sm text-slate-600">No desks yet. Click the map to create one.</p>
+        ) : (
+          <div className="overflow-auto">
+            <table className="w-full min-w-[520px] border-collapse text-sm">
+              <thead>
+                <tr className="text-left">
+                  <th className="border-b p-2">Label</th>
+                  <th className="border-b p-2">Status</th>
+                  <th className="border-b p-2">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...desks]
+                  .sort((a, b) => a.label.localeCompare(b.label))
+                  .map((d) => {
+                    const isSelected = d.id === selectedDeskId;
+                    return (
+                      <tr key={d.id} className={isSelected ? "bg-slate-50" : undefined}>
+                        <td className="border-b p-2">
+                          <button
+                            type="button"
+                            className="text-left underline"
+                            onClick={() => setSelectedDeskId(d.id)}
+                            title="Select and highlight on map"
+                          >
+                            {d.label}
+                          </button>
+                        </td>
+
+                        <td className="border-b p-2">
+                          <span className={d.enabled ? "text-slate-700" : "text-slate-500"}>
+                            {d.enabled ? "Enabled" : "Disabled"}
+                          </span>
+                        </td>
+
+                        <td className="border-b p-2">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              className="rounded border px-2 py-1"
+                              onClick={() => setSelectedDeskId(d.id)}
+                            >
+                              Select
+                            </button>
+
+                            <button
+                              type="button"
+                              className="rounded border px-2 py-1"
+                              onClick={() => void disableDesk(d.id).catch((err) => setStatus(String(err)))}
+                            >
+                              Disable
+                            </button>
+
+                            <button
+                              type="button"
+                              className="rounded border px-2 py-1"
+                              onClick={() => void deleteDesk(d.id).catch((err) => setStatus(String(err)))}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

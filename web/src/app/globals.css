@@ -24,3 +24,24 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+button,
+a {
+  transition: outline-offset 120ms ease, outline-width 120ms ease;
+}
+
+button:not(:disabled):hover,
+a:hover {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}

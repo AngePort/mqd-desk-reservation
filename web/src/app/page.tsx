@@ -15,7 +15,7 @@ export default async function Home() {
   return (
     <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-4 p-6">
       <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold">Desk Reservation (MVP)</h1>
+        <h1 className="text-2xl font-semibold">MQD Desk Reservation</h1>
         <p className="text-sm text-slate-600">
           Select a time range, click a desk, and confirm.
         </p>
