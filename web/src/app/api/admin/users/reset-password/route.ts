@@ -3,10 +3,11 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { hashPassword } from "@/lib/password";
+import { getRequestOrigin } from "@/lib/requestOrigin";
 import { userRepo } from "@/lib/repos/userRepo";
 
 function redirectTo(request: NextRequest, path: string) {
-  return NextResponse.redirect(new URL(path, request.url));
+  return NextResponse.redirect(new URL(path, getRequestOrigin(request)));
 }
 
 export async function POST(request: NextRequest) {

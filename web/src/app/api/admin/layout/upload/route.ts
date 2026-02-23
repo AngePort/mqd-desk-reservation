@@ -7,9 +7,10 @@ import { NextResponse } from "next/server";
 
 import { requireAdmin } from "@/lib/auth";
 import { layoutRepo } from "@/lib/repos/layoutRepo";
+import { getRequestOrigin } from "@/lib/requestOrigin";
 
 function redirectTo(request: NextRequest, to: string) {
-  return NextResponse.redirect(new URL(to, request.url));
+  return NextResponse.redirect(new URL(to, getRequestOrigin(request)));
 }
 
 function getSafeExt(filename: string) {
