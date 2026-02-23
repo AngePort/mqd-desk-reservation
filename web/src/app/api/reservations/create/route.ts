@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { isValidTimeRange, parseIsoDate } from "@/lib/reservationRules";
+import { isValidTimeRange, isWithinMaxDuration, MAX_RESERVATION_MINUTES, parseIsoDate } from "@/lib/reservationRules";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +26,10 @@ export async function POST(request: Request) {
 
   if (!deskId || !requestedPersonId || !startAt || !endAt || !isValidTimeRange({ startAt, endAt })) {
     return NextResponse.json({ error: "deskId, personId, startAt, endAt are required" }, { status: 400 });
+  }
+
+  if (!isWithinMaxDuration({ startAt, endAt }, MAX_RESERVATION_MINUTES)) {
+    return NextResponse.json({ error: `max reservation length is ${MAX_RESERVATION_MINUTES} minutes` }, { status: 400 });
   }
 
   const desk = await prisma.desk.findUnique({ where: { id: deskId } });

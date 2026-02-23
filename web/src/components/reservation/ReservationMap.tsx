@@ -66,8 +66,13 @@ function toDatetimeLocalValue(d: Date) {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
 
+function parseDatetimeLocalValue(value: string) {
+  const d = new Date(value);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
 async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { method: "GET" });
+  const res = await fetch(url, { method: "GET", cache: "no-store" });
   if (!res.ok) throw new Error(`Request failed (${res.status})`);
   return (await res.json()) as T;
 }
@@ -107,8 +112,10 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
 
   const selectedDesk = useMemo(() => desks.find((d) => d.id === selectedDeskId) ?? null, [desks, selectedDeskId]);
 
-  async function refreshAvailability() {
-    setIsLoading(true);
+  async function refreshAvailability(options?: { silent?: boolean }) {
+    const silent = options?.silent === true;
+    if (!silent) setIsLoading(true);
+
     try {
       const startAt = toIso(startAtLocal);
       const endAt = toIso(endAtLocal);
@@ -119,7 +126,7 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
 
       setDesks(availability.desks);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }
 
@@ -154,6 +161,46 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
     return () => window.clearTimeout(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startAtLocal, endAtLocal]);
+
+  useEffect(() => {
+    // If the selected time window is fully in the past, the UI would keep showing
+    // historical availability (e.g. the desk stays red because it WAS reserved in that past window).
+    // Auto-advance the window forward to keep the map reflecting current availability.
+    const handle = window.setInterval(() => {
+      const start = parseDatetimeLocalValue(startAtLocal);
+      const end = parseDatetimeLocalValue(endAtLocal);
+      if (!start || !end) return;
+
+      const durationMs = end.getTime() - start.getTime();
+      if (!Number.isFinite(durationMs) || durationMs <= 0) return;
+
+      const now = new Date();
+      if (end.getTime() > now.getTime()) return;
+
+      const nextStart = nowRoundedToMinutes();
+      const nextEnd = new Date(nextStart.getTime() + durationMs);
+
+      setStartAtLocal(toDatetimeLocalValue(nextStart));
+      setEndAtLocal(toDatetimeLocalValue(nextEnd));
+      setSelectedDeskId(null);
+      setStatus(null);
+    }, 10_000);
+
+    return () => window.clearInterval(handle);
+  }, [startAtLocal, endAtLocal]);
+
+  useEffect(() => {
+    // Auto-refresh so desks flip back to available once reservations expire.
+    // Keep this silent to avoid flickering the loading indicator.
+    const handle = window.setInterval(() => {
+      void refreshAvailability({ silent: true }).catch(() => {
+        // ignore background refresh errors; user-initiated changes still surface errors
+      });
+    }, 60_000);
+
+    return () => window.clearInterval(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutId, startAtLocal, endAtLocal]);
 
   function applyDurationMinutes(minutes: number) {
     const start = new Date(startAtLocal);

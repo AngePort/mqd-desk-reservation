@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { isValidTimeRange, parseIsoDate } from "@/lib/reservationRules";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(request: Request) {
   await requireUser();
@@ -19,6 +20,16 @@ export async function GET(request: Request) {
   if (!layoutId || !startAt || !endAt || !isValidTimeRange({ startAt, endAt })) {
     return NextResponse.json({ error: "layoutId, startAt, endAt are required" }, { status: 400 });
   }
+
+  // Auto-expire old reservations so desks don't remain "reserved" after time is up.
+  // The MVP represents cancellation/expiry by deleting the reservation row.
+  // (There is no cancelledAt/status field in the schema.)
+  const now = new Date();
+  await prisma.reservation.deleteMany({
+    where: {
+      endAt: { lte: now },
+    },
+  });
 
   const desks = await prisma.desk.findMany({
     where: { layoutId },
@@ -62,5 +73,9 @@ export async function GET(request: Request) {
       reserved: Boolean(reservedByDeskId[d.id]),
       reservation: reservedByDeskId[d.id] ?? null,
     })),
+  }, {
+    headers: {
+      "cache-control": "no-store",
+    },
   });
 }
