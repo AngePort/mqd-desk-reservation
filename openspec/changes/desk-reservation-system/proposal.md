@@ -7,11 +7,11 @@ Office desk availability is often tracked informally, leading to double-bookings
 - Add an office layout map view that shows desks and their availability for a selected date/time range.
 - Add an interactive reservation flow: users click/tap a desk on the map, choose a person from an office personnel dropdown, select a date/time range (years → minutes), and confirm.
 - Visually reflect reservation state on the map: reserved desks render in red and show the reserver’s name on hover/click.
-- **MVP authentication:** Introduce a single shared login (one account) with full permissions to manage desks and reservations.
-- **Planned (post-MVP):** Split into two roles with separate login credentials:
-  - **Admin**: full control over desk locations and all reservations (create/edit/delete/override).
+- **Authentication:** Introduce secure per-user accounts (email + password). Passwords MUST be stored as secure hashes (never plaintext).
+- **Roles:** Support two roles with separate login credentials:
+  - **Admin**: full control over desk locations and all reservations (create/edit/delete/override) and manages user accounts.
   - **User**: can only reserve a desk for themselves and can hold at most one active reservation.
-- **Planned (post-MVP) booking rules:**
+- Booking rules:
   - Users cannot reserve for someone else.
   - Users cannot cancel their own reservations.
   - Each user may have only one active reservation at a time.
@@ -22,9 +22,9 @@ Office desk availability is often tracked informally, leading to double-bookings
 
 ### New Capabilities
 
-- `auth-single-account`: Authentication for a single shared account with full permissions (admin-style) for the MVP.
+- `auth-accounts`: Secure authentication for Admin/User accounts, admin-managed user provisioning, and session management.
 - `office-map`: Display an office layout diagram and support admin-defined desk locations on the map.
-- `desk-reservations`: View desk availability and create/cancel reservations via map interaction for a selected person; enforce desk/time conflict rules in the MVP. (Self-only and “one active reservation per user” are post-MVP.)
+- `desk-reservations`: View desk availability and create reservations via map interaction; enforce desk/time conflict rules and user restrictions (self-only, one active reservation per user, user cannot cancel).
 - `admin-desk-management`: Admin CRUD for desks/locations and the ability to override, edit, or delete any reservation/desk assignment.
 - `personnel-directory`: Maintain a list of office personnel for the reservation dropdown and associate reservations to personnel identities.
 
@@ -37,4 +37,5 @@ Office desk availability is often tracked informally, leading to double-bookings
 - Introduces persistent storage for users/personnel, desk locations, and reservations.
 - Requires a UI that can render an office map and map desk locations to clickable/tappable regions.
 - Adds authentication and establishes a path to role-based access control (Admin/User) in a later change.
-- Adds reservation conflict checking and rule enforcement (per-desk availability). Additional per-user restrictions are post-MVP.
+- Adds authentication + role-based access control across desk management and reservation operations.
+- Adds reservation conflict checking and rule enforcement (per-desk availability and per-user restrictions).

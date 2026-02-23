@@ -1,0 +1,94 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+
+  personId String?  @unique
+  person   Person?  @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  reservationsCreated Reservation[] @relation("ReservationCreatedBy")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Person {
+  id          String  @id @default(cuid())
+  displayName String
+  active      Boolean @default(true)
+
+  user         User?
+  reservations Reservation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Layout {
+  id                String  @id @default(cuid())
+  baseImagePath     String
+  referenceImagePath String?
+
+  desks Desk[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Desk {
+  id      String  @id @default(cuid())
+  label   String
+  enabled Boolean @default(true)
+
+  // Normalized rectangle geometry in layout coordinates (0..1)
+  x      Float
+  y      Float
+  width  Float
+  height Float
+
+  layoutId String
+  layout   Layout @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+
+  reservations Reservation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Reservation {
+  id      String   @id @default(cuid())
+  startAt DateTime
+  endAt   DateTime
+
+  deskId String
+  desk   Desk   @relation(fields: [deskId], references: [id], onDelete: Cascade)
+
+  personId String
+  person   Person @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  createdByUserId String?
+  createdByUser   User? @relation("ReservationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([deskId, startAt, endAt])
+  @@index([personId, startAt, endAt])
+}

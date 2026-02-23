@@ -1,0 +1,52 @@
+
+> web@0.1.0 build
+> next build
+
+▲ Next.js 16.1.6 (Turbopack)
+- Environments: .env
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 9.7s
+  Running TypeScript ...
+  Collecting page data using 5 workers ...
+  Generating static pages using 5 workers (0/16) ...
+  Generating static pages using 5 workers (4/16) 
+  Generating static pages using 5 workers (8/16) 
+  Generating static pages using 5 workers (12/16) 
+✓ Generating static pages using 5 workers (16/16) in 351.2ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ƒ /
+├ ○ /_not-found
+├ ƒ /admin/desks
+├ ƒ /admin/layout
+├ ƒ /admin/personnel
+├ ƒ /admin/users
+├ ƒ /api/admin/desks/create
+├ ƒ /api/admin/desks/delete
+├ ƒ /api/admin/desks/disable
+├ ƒ /api/admin/desks/update
+├ ƒ /api/admin/layout/upload
+├ ƒ /api/admin/personnel/create
+├ ƒ /api/admin/personnel/deactivate
+├ ƒ /api/admin/personnel/update
+├ ƒ /api/admin/users/create
+├ ƒ /api/admin/users/reset-password
+├ ƒ /api/auth/login
+├ ƒ /api/auth/logout
+├ ƒ /api/auth/setup
+├ ƒ /api/availability
+├ ƒ /api/desks
+├ ƒ /api/layout
+├ ƒ /api/personnel
+├ ƒ /api/reservations/cancel
+├ ƒ /api/reservations/create
+├ ƒ /api/reservations/update
+├ ƒ /login
+└ ƒ /setup
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
