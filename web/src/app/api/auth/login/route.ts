@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { verifyPassword } from "@/lib/password";
 import { prisma } from "@/lib/prisma";
+import { getRequestOrigin } from "@/lib/requestOrigin";
 import { setSessionCookie } from "@/lib/session";
 
 export async function POST(request: NextRequest) {
@@ -18,15 +19,19 @@ export async function POST(request: NextRequest) {
   });
 
   if (!user) {
-    return NextResponse.redirect(new URL("/login?error=invalid", request.url));
+    return NextResponse.redirect(
+      new URL("/login?error=invalid", getRequestOrigin(request)),
+    );
   }
 
   const isValid = await verifyPassword(user.passwordHash, password);
   if (!isValid) {
-    return NextResponse.redirect(new URL("/login?error=invalid", request.url));
+    return NextResponse.redirect(
+      new URL("/login?error=invalid", getRequestOrigin(request)),
+    );
   }
 
-  const response = NextResponse.redirect(new URL("/", request.url));
+  const response = NextResponse.redirect(new URL("/", getRequestOrigin(request)));
   await setSessionCookie(response, { userId: user.id });
   return response;
 }
