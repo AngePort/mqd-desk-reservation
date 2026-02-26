@@ -171,6 +171,7 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
   const [isCalendarLoading, setIsCalendarLoading] = useState(false);
   const [highlightReservationId, setHighlightReservationId] = useState<string | null>(null);
   const [calendarReloadToken, setCalendarReloadToken] = useState(0);
+  const calendarSilentNextRef = useRef(false);
 
   const mapRef = useRef<HTMLDivElement | null>(null);
   const lastSelectedDeskIdRef = useRef<string | null>(null);
@@ -262,7 +263,7 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
       void refreshAvailability({ silent: true }).catch(() => {
         // ignore background refresh errors; user-initiated changes still surface errors
       });
-    }, 60_000);
+    }, 30_000);
 
     return () => window.clearInterval(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -303,8 +304,13 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
     const monthStart = startOfLocalDay(month);
     const monthEnd = new Date(month.getFullYear(), month.getMonth() + 1, 1, 0, 0, 0, 0);
 
-    setIsCalendarLoading(true);
-    setCalendarStatus(null);
+    const silent = calendarSilentNextRef.current;
+    calendarSilentNextRef.current = false;
+
+    if (!silent) {
+      setIsCalendarLoading(true);
+      setCalendarStatus(null);
+    }
 
     void (async () => {
       try {
@@ -323,16 +329,31 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
         setCalendarItems(Array.isArray(data?.items) ? (data.items as DeskReservationItem[]) : []);
       } catch (err) {
         if (controller.signal.aborted) return;
-        setCalendarItems([]);
-        setCalendarStatus(err instanceof Error ? err.message : "Failed to load calendar");
+        if (!silent) {
+          setCalendarItems([]);
+          setCalendarStatus(err instanceof Error ? err.message : "Failed to load calendar");
+        }
       } finally {
         if (controller.signal.aborted) return;
-        setIsCalendarLoading(false);
+        if (!silent) setIsCalendarLoading(false);
       }
     })();
 
     return () => controller.abort();
   }, [selectedDeskId, calendarMonth, calendarReloadToken]);
+
+  useEffect(() => {
+    // Keep the calendar/month view in sync with reservations created/cancelled by other users.
+    // This is a simple polling approach to avoid adding server push complexity.
+    if (!selectedDeskId) return;
+
+    const handle = window.setInterval(() => {
+      calendarSilentNextRef.current = true;
+      setCalendarReloadToken((n) => n + 1);
+    }, 30_000);
+
+    return () => window.clearInterval(handle);
+  }, [selectedDeskId]);
 
   const calendarSelectedItems = useMemo(() => {
     const day = parseDateValue(calendarSelectedDay);
