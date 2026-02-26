@@ -16,6 +16,8 @@ type DeskAvailability = {
 
 type PersonOption = { id: string; displayName: string };
 
+type DeskReservationItem = { id: string; personName: string; startAt: string; endAt: string };
+
 type Props = {
   layoutId: string;
   baseSrc: string;
@@ -66,6 +68,60 @@ function toDatetimeLocalValue(d: Date) {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
 
+function toDateValue(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function toYearMonthValue(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  return `${yyyy}-${mm}`;
+}
+
+function parseYearMonthValue(value: string) {
+  const m = /^([0-9]{4})-([0-9]{2})$/.exec(value);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const monthIndex = Number(m[2]) - 1;
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex)) return null;
+  if (monthIndex < 0 || monthIndex > 11) return null;
+  const d = new Date(year, monthIndex, 1);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+function parseDateValue(value: string) {
+  // HTML date input is always YYYY-MM-DD
+  const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(value);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const monthIndex = Number(m[2]) - 1;
+  const day = Number(m[3]);
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) return null;
+  const d = new Date(year, monthIndex, day);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
+
+function startOfLocalDay(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+}
+
+function addDays(d: Date, days: number) {
+  const next = new Date(d.getTime());
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatLocalTime(iso: string) {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return iso;
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+}
+
 function parseDatetimeLocalValue(value: string) {
   const d = new Date(value);
   return Number.isFinite(d.getTime()) ? d : null;
@@ -108,7 +164,18 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
   const [status, setStatus] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
+  const [calendarMonth, setCalendarMonth] = useState(() => toYearMonthValue(new Date()));
+  const [calendarSelectedDay, setCalendarSelectedDay] = useState(() => toDateValue(new Date()));
+  const [calendarItems, setCalendarItems] = useState<DeskReservationItem[]>([]);
+  const [calendarStatus, setCalendarStatus] = useState<string | null>(null);
+  const [isCalendarLoading, setIsCalendarLoading] = useState(false);
+  const [highlightReservationId, setHighlightReservationId] = useState<string | null>(null);
+  const [calendarReloadToken, setCalendarReloadToken] = useState(0);
+  const calendarSilentNextRef = useRef(false);
+
   const mapRef = useRef<HTMLDivElement | null>(null);
+  const lastSelectedDeskIdRef = useRef<string | null>(null);
+  const timelineRef = useRef<HTMLDivElement | null>(null);
 
   const selectedDesk = useMemo(() => desks.find((d) => d.id === selectedDeskId) ?? null, [desks, selectedDeskId]);
 
@@ -196,11 +263,124 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
       void refreshAvailability({ silent: true }).catch(() => {
         // ignore background refresh errors; user-initiated changes still surface errors
       });
-    }, 60_000);
+    }, 30_000);
 
     return () => window.clearInterval(handle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layoutId, startAtLocal, endAtLocal]);
+
+  useEffect(() => {
+    // When a desk is selected, default the calendar day to the current "Start" date.
+    if (!selectedDeskId) {
+      lastSelectedDeskIdRef.current = null;
+      setCalendarItems([]);
+      setCalendarStatus(null);
+      setIsCalendarLoading(false);
+      setHighlightReservationId(null);
+      return;
+    }
+
+    if (lastSelectedDeskIdRef.current === selectedDeskId) return;
+    lastSelectedDeskIdRef.current = selectedDeskId;
+
+    const start = parseDatetimeLocalValue(startAtLocal);
+    const base = start ?? new Date();
+    setCalendarMonth(toYearMonthValue(base));
+    setCalendarSelectedDay(toDateValue(base));
+    setHighlightReservationId(null);
+  }, [selectedDeskId, startAtLocal]);
+
+  useEffect(() => {
+    if (!selectedDeskId) return;
+
+    const month = parseYearMonthValue(calendarMonth);
+    if (!month) {
+      setCalendarItems([]);
+      setCalendarStatus("Invalid month.");
+      return;
+    }
+
+    const controller = new AbortController();
+    const monthStart = startOfLocalDay(month);
+    const monthEnd = new Date(month.getFullYear(), month.getMonth() + 1, 1, 0, 0, 0, 0);
+
+    const silent = calendarSilentNextRef.current;
+    calendarSilentNextRef.current = false;
+
+    if (!silent) {
+      setIsCalendarLoading(true);
+      setCalendarStatus(null);
+    }
+
+    void (async () => {
+      try {
+        const url = `/api/reservations/list?deskId=${encodeURIComponent(selectedDeskId)}&startAt=${encodeURIComponent(
+          monthStart.toISOString(),
+        )}&endAt=${encodeURIComponent(monthEnd.toISOString())}`;
+
+        const res = await fetch(url, { method: "GET", cache: "no-store", signal: controller.signal });
+        const data = (await res.json().catch(() => ({}))) as any;
+        if (!res.ok) {
+          const message = typeof data?.error === "string" ? data.error : `Request failed (${res.status})`;
+          throw new Error(message);
+        }
+
+        if (controller.signal.aborted) return;
+        setCalendarItems(Array.isArray(data?.items) ? (data.items as DeskReservationItem[]) : []);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        if (!silent) {
+          setCalendarItems([]);
+          setCalendarStatus(err instanceof Error ? err.message : "Failed to load calendar");
+        }
+      } finally {
+        if (controller.signal.aborted) return;
+        if (!silent) setIsCalendarLoading(false);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [selectedDeskId, calendarMonth, calendarReloadToken]);
+
+  useEffect(() => {
+    // Keep the calendar/month view in sync with reservations created/cancelled by other users.
+    // This is a simple polling approach to avoid adding server push complexity.
+    if (!selectedDeskId) return;
+
+    const handle = window.setInterval(() => {
+      calendarSilentNextRef.current = true;
+      setCalendarReloadToken((n) => n + 1);
+    }, 30_000);
+
+    return () => window.clearInterval(handle);
+  }, [selectedDeskId]);
+
+  const calendarSelectedItems = useMemo(() => {
+    const day = parseDateValue(calendarSelectedDay);
+    if (!day) return [];
+    const dayStart = startOfLocalDay(day);
+    const dayEnd = addDays(dayStart, 1);
+
+    return calendarItems.filter((r) => {
+      const start = new Date(r.startAt);
+      const end = new Date(r.endAt);
+      if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return false;
+      return start.getTime() < dayEnd.getTime() && end.getTime() > dayStart.getTime();
+    });
+  }, [calendarItems, calendarSelectedDay]);
+
+  function jumpToReservation(r: DeskReservationItem) {
+    const start = new Date(r.startAt);
+    if (Number.isFinite(start.getTime())) {
+      setCalendarMonth(toYearMonthValue(start));
+      setCalendarSelectedDay(toDateValue(start));
+    }
+
+    setHighlightReservationId(r.id);
+    window.setTimeout(() => {
+      timelineRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }, 0);
+  }
 
   function applyDurationMinutes(minutes: number) {
     const start = new Date(startAtLocal);
@@ -233,14 +413,31 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
     }
 
     try {
-      await postJson("/api/reservations/create", {
+      const result = await postJson<{ reservation?: { id: string; startAt: string; endAt: string } }>(
+        "/api/reservations/create",
+        {
         deskId: selectedDesk.id,
         personId,
         startAt: toIso(startAtLocal),
         endAt: toIso(endAtLocal),
-      });
+        },
+      );
 
       await refreshAvailability();
+      // Refresh month data so the calendar + list update immediately.
+      setCalendarReloadToken((n) => n + 1);
+
+      const created = result?.reservation;
+      const createdStart = created?.startAt ? new Date(created.startAt) : null;
+      if (created && createdStart && Number.isFinite(createdStart.getTime())) {
+        setCalendarMonth(toYearMonthValue(createdStart));
+        setCalendarSelectedDay(toDateValue(createdStart));
+        setHighlightReservationId(created.id);
+        window.setTimeout(() => {
+          timelineRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }, 0);
+      }
+
       setStatus("Reservation created.");
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Failed to reserve");
@@ -254,6 +451,9 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
     try {
       await postJson("/api/reservations/cancel", { reservationId: selectedDesk.reservation.reservationId });
       await refreshAvailability();
+
+      setHighlightReservationId(null);
+      setCalendarReloadToken((n) => n + 1);
       setStatus("Reservation cancelled.");
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Failed to cancel");
@@ -464,11 +664,337 @@ export function ReservationMap({ layoutId, baseSrc, currentUser }: Props) {
                 </button>
               </>
             ) : null}
+
+            <div className="mt-2 grid gap-2 border-t pt-3">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <h4 className="text-sm font-medium">Calendar</h4>
+              </div>
+
+              <MonthCalendar
+                monthValue={calendarMonth}
+                selectedDayValue={calendarSelectedDay}
+                items={calendarItems}
+                onChangeMonth={setCalendarMonth}
+                onSelectDay={(v) => {
+                  setCalendarSelectedDay(v);
+                  setHighlightReservationId(null);
+                }}
+              />
+
+              <p className="text-xs text-slate-600">Selected day time blocks: reserved = red, blank = available.</p>
+
+              <div ref={timelineRef}>
+                <DeskDayTimeline
+                  dayValue={calendarSelectedDay}
+                  items={calendarSelectedItems}
+                  highlightReservationId={highlightReservationId}
+                />
+              </div>
+
+              {isCalendarLoading ? <p className="text-xs text-slate-600">Loading calendar…</p> : null}
+              {calendarStatus ? <p className="text-xs text-slate-600">{calendarStatus}</p> : null}
+
+              {!isCalendarLoading && !calendarStatus && calendarSelectedItems.length === 0 ? (
+                <p className="text-xs text-slate-600">No reservations for this desk on the selected day.</p>
+              ) : null}
+
+              {calendarSelectedItems.length > 0 ? (
+                <div className="grid gap-1">
+                  {calendarSelectedItems.map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className={`w-full rounded border px-2 py-1 text-left text-xs ${
+                        highlightReservationId === r.id
+                          ? "border-slate-900 bg-slate-50 text-slate-900"
+                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                      }`}
+                      onClick={() => jumpToReservation(r)}
+                    >
+                      <span className="font-medium text-slate-900">
+                        {formatLocalTime(r.startAt)}–{formatLocalTime(r.endAt)}
+                      </span>
+                      <span className="text-slate-600"> • {r.personName}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           </>
         ) : (
           <p className="text-sm text-slate-600">Click a desk on the map to reserve it.</p>
         )}
       </div>
     </section>
+  );
+}
+
+function MonthCalendar({
+  monthValue,
+  selectedDayValue,
+  items,
+  onChangeMonth,
+  onSelectDay,
+}: {
+  monthValue: string;
+  selectedDayValue: string;
+  items: DeskReservationItem[];
+  onChangeMonth: (value: string) => void;
+  onSelectDay: (value: string) => void;
+}) {
+  const month = parseYearMonthValue(monthValue) ?? new Date();
+  const year = month.getFullYear();
+  const monthIndex = month.getMonth();
+
+  const monthStart = new Date(year, monthIndex, 1);
+  const monthStartLocal = startOfLocalDay(monthStart);
+  const monthEndLocal = startOfLocalDay(new Date(year, monthIndex + 1, 1));
+  const firstWeekday = monthStart.getDay(); // 0=Sun
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+
+  const yearOptions = useMemo(() => {
+    const current = new Date().getFullYear();
+    const list: number[] = [];
+    for (let y = current - 5; y <= current + 5; y++) list.push(y);
+    // Ensure the currently selected year is always included.
+    if (!list.includes(year)) list.push(year);
+    list.sort((a, b) => a - b);
+    return list;
+  }, [year]);
+
+  const monthNames = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+
+  const reservedByDay = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const r of items) {
+      const start = new Date(r.startAt);
+      const end = new Date(r.endAt);
+      if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) continue;
+
+      // Mark each affected day in the visible month.
+      // Intersect the reservation with the current month so multi-year reservations stay fast and accurate.
+      const overlapStart = new Date(Math.max(start.getTime(), monthStartLocal.getTime()));
+      const overlapEnd = new Date(Math.min(end.getTime(), monthEndLocal.getTime()));
+      if (overlapStart.getTime() >= overlapEnd.getTime()) continue;
+
+      let cursor = startOfLocalDay(overlapStart);
+      const last = startOfLocalDay(addDays(overlapEnd, -1));
+
+      while (cursor.getTime() <= last.getTime()) {
+        const key = toDateValue(cursor);
+        map[key] = (map[key] ?? 0) + 1;
+        cursor = addDays(cursor, 1);
+      }
+    }
+    return map;
+  }, [items, monthIndex, monthEndLocal, monthStartLocal, year]);
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="grid gap-1">
+          <span className="text-xs text-slate-600">Month</span>
+          <div className="flex flex-wrap gap-2">
+            <select
+              className="h-9 rounded border px-3 text-sm"
+              value={String(monthIndex)}
+              onChange={(e) => {
+                const nextMonthIndex = Number(e.target.value);
+                if (!Number.isFinite(nextMonthIndex)) return;
+                onChangeMonth(toYearMonthValue(new Date(year, nextMonthIndex, 1)));
+              }}
+            >
+              {monthNames.map((name, idx) => (
+                <option key={name} value={String(idx)}>
+                  {name}
+                </option>
+              ))}
+            </select>
+
+            <select
+              className="h-9 rounded border px-3 text-sm"
+              value={String(year)}
+              onChange={(e) => {
+                const nextYear = Number(e.target.value);
+                if (!Number.isFinite(nextYear)) return;
+                onChangeMonth(toYearMonthValue(new Date(nextYear, monthIndex, 1)));
+              }}
+            >
+              {yearOptions.map((y) => (
+                <option key={y} value={String(y)}>
+                  {y}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-600">
+          {monthNames[monthIndex]} {year}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-7 gap-1 text-[10px] font-medium text-slate-700">
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+          <div key={d} className="px-1 py-0.5 text-center">
+            {d}
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-1">
+        {Array.from({ length: 42 }, (_, cellIndex) => {
+          const dayNumber = cellIndex - firstWeekday + 1;
+          const inMonth = dayNumber >= 1 && dayNumber <= daysInMonth;
+          if (!inMonth) {
+            return <div key={cellIndex} className="h-9 rounded border border-slate-200 bg-slate-50" />;
+          }
+
+          const dayValue = toDateValue(new Date(year, monthIndex, dayNumber));
+          const isSelected = dayValue === selectedDayValue;
+          const reservationCount = reservedByDay[dayValue] ?? 0;
+
+          const bg = reservationCount > 0 ? "bg-red-100" : "bg-white";
+          const border = reservationCount > 0 ? "border-red-300" : "border-slate-300";
+
+          return (
+            <button
+              key={cellIndex}
+              type="button"
+              className={`h-10 rounded border px-2 text-left text-sm font-medium text-slate-900 ${bg} ${border} ${
+                isSelected
+                  ? "outline outline-2 outline-black"
+                  : "hover:outline hover:outline-2 hover:outline-slate-900"
+              }`}
+              title={reservationCount > 0 ? `${reservationCount} reservation(s) on this day` : "No reservations"}
+              onClick={() => onSelectDay(dayValue)}
+            >
+              <div className="flex items-center justify-between">
+                <span>{dayNumber}</span>
+                {reservationCount > 0 ? <span className="h-2 w-2 rounded-full bg-red-700" aria-label="Reserved" /> : null}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DeskDayTimeline({
+  dayValue,
+  items,
+  highlightReservationId,
+}: {
+  dayValue: string;
+  items: DeskReservationItem[];
+  highlightReservationId: string | null;
+}) {
+  const day = parseDateValue(dayValue);
+  const dayStart = day ? startOfLocalDay(day) : null;
+  const minutesInDay = 24 * 60;
+
+  const blocks = useMemo(() => {
+    if (!dayStart) {
+      return [] as Array<{
+        id: string;
+        leftPct: number;
+        widthPct: number;
+        title: string;
+        label: string;
+        isHighlighted: boolean;
+      }>;
+    }
+
+    const list: Array<{
+      id: string;
+      leftPct: number;
+      widthPct: number;
+      title: string;
+      label: string;
+      isHighlighted: boolean;
+    }> = [];
+    for (const r of items) {
+      const start = new Date(r.startAt);
+      const end = new Date(r.endAt);
+      if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) continue;
+
+      const startMinRaw = (start.getTime() - dayStart.getTime()) / 60000;
+      const endMinRaw = (end.getTime() - dayStart.getTime()) / 60000;
+      if (!Number.isFinite(startMinRaw) || !Number.isFinite(endMinRaw)) continue;
+
+      const startMin = Math.max(0, Math.min(minutesInDay, startMinRaw));
+      const endMin = Math.max(0, Math.min(minutesInDay, endMinRaw));
+      const dur = endMin - startMin;
+      if (!Number.isFinite(dur) || dur <= 0) continue;
+
+      const leftPct = (startMin / minutesInDay) * 100;
+      const widthPct = Math.max((dur / minutesInDay) * 100, 0.5);
+
+      list.push({
+        id: r.id,
+        leftPct,
+        widthPct,
+        title: `${r.personName} — ${formatLocal(r.startAt)} → ${formatLocal(r.endAt)}`,
+        label: r.personName,
+        isHighlighted: r.id === highlightReservationId,
+      });
+    }
+    return list;
+  }, [dayStart, items, highlightReservationId]);
+
+  return (
+    <div className="grid gap-1">
+      <div className="flex justify-between text-[10px] text-slate-500">
+        {(() => {
+          const base = dayStart ?? new Date();
+          const labels = [0, 6, 12, 18, 24].map((h) => {
+            const d = new Date(base.getTime());
+            d.setHours(h, 0, 0, 0);
+            return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+          });
+          return labels.map((t, idx) => <span key={`${t}-${idx}`}>{t}</span>);
+        })()}
+      </div>
+
+      <div className="relative h-10 w-full overflow-hidden rounded border bg-slate-50">
+        {[0, 6, 12, 18, 24].map((h) => {
+          const leftPct = (h / 24) * 100;
+          return (
+            <div key={h} className="pointer-events-none absolute inset-y-0" style={{ left: `${leftPct}%` }}>
+              <div className="h-full w-px bg-slate-200" />
+            </div>
+          );
+        })}
+
+        {blocks.map((b) => (
+          <div
+            key={b.id}
+            title={b.title}
+            className={`absolute inset-y-1 overflow-hidden rounded border px-1 text-[10px] text-slate-900 ${
+              b.isHighlighted
+                ? "border-slate-900 bg-red-500/55 outline outline-2 outline-black"
+                : "border-red-700 bg-red-500/40"
+            }`}
+            style={{ left: `${b.leftPct}%`, width: `${b.widthPct}%` }}
+          >
+            <div className="truncate">{b.label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
