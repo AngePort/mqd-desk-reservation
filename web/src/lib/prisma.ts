@@ -2,6 +2,8 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import path from "node:path";
 
+import { getEnv } from "@/lib/env";
+
 function resolveSqliteFilePath(databaseUrl: string): string {
   if (!databaseUrl.startsWith("file:")) {
     throw new Error('DATABASE_URL must start with "file:" for SQLite');
@@ -13,10 +15,7 @@ function resolveSqliteFilePath(databaseUrl: string): string {
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
-  throw new Error("DATABASE_URL is required");
-}
+const { DATABASE_URL: databaseUrl } = getEnv();
 
 const sqliteFilePath = resolveSqliteFilePath(databaseUrl);
 const adapter = new PrismaBetterSqlite3({ url: sqliteFilePath });

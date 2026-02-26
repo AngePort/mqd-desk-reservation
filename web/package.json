@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:vm": "next dev -H 0.0.0.0 -p 3001",
     "build": "next build",
     "start": "next start",
+    "start:vm": "next start -H 0.0.0.0 -p 3001",
     "lint": "eslint",
     "format": "prettier . --write",
     "format:check": "prettier . --check",

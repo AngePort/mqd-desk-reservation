@@ -3,7 +3,9 @@ export type TimeRange = {
   endAt: Date;
 };
 
-export const MAX_RESERVATION_MINUTES = 4 * 60;
+// Allow long-running desk assignments (e.g. multi-year).
+// This is a simple cap to prevent truly unbounded ranges.
+export const MAX_RESERVATION_MINUTES = 10 * 365 * 24 * 60;
 
 export function isValidTimeRange(range: TimeRange) {
   return range.startAt instanceof Date &&

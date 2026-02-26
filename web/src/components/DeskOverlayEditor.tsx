@@ -112,9 +112,14 @@ export function DeskOverlayEditor({
   const pendingPointRef = useRef<{ x: number; y: number } | null>(null);
 
   const [desks, setDesks] = useState<DeskOverlay[]>(initialDesks);
+  const [savedById, setSavedById] = useState<Record<string, DeskOverlay>>(() => {
+    const entries = initialDesks.map((d) => [d.id, d] as const);
+    return Object.fromEntries(entries);
+  });
   const [selectedDeskId, setSelectedDeskId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [drag, setDrag] = useState<DragMode>({ kind: "none" });
+  const [isSaving, setIsSaving] = useState(false);
 
   const selectedDesk = useMemo(
     () => desks.find((d) => d.id === selectedDeskId) ?? null,
@@ -124,6 +129,35 @@ export function DeskOverlayEditor({
   useEffect(() => {
     desksRef.current = desks;
   }, [desks]);
+
+  function approxEqual(a: number, b: number, eps = 0.0001) {
+    return Math.abs(a - b) <= eps;
+  }
+
+  function isDeskDirty(d: DeskOverlay) {
+    const saved = savedById[d.id];
+    if (!saved) return false;
+    if (d.label !== saved.label) return true;
+    if (d.enabled !== saved.enabled) return true;
+    if (!approxEqual(d.x, saved.x)) return true;
+    if (!approxEqual(d.y, saved.y)) return true;
+    if (!approxEqual(d.width, saved.width)) return true;
+    if (!approxEqual(d.height, saved.height)) return true;
+    return false;
+  }
+
+  const hasUnsavedChanges = useMemo(() => desks.some((d) => isDeskDirty(d)), [desks, savedById]);
+
+  useEffect(() => {
+    // Warn on full page unload (refresh/close). Note: SPA navigation may not trigger this.
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [hasUnsavedChanges]);
 
   function getBounds() {
     const el = containerRef.current;
@@ -153,11 +187,19 @@ export function DeskOverlayEditor({
     });
 
     setDesks((prev) => [created.desk, ...prev]);
+    setSavedById((prev) => ({ ...prev, [created.desk.id]: created.desk }));
     setSelectedDeskId(created.desk.id);
   }
 
   async function saveDesk(next: DeskOverlay) {
     setStatus(null);
+
+    if (!next.label.trim()) {
+      setStatus("Label cannot be empty.");
+      return;
+    }
+
+    setIsSaving(true);
 
     const rect = normalizeRect({
       x: next.x,
@@ -166,29 +208,37 @@ export function DeskOverlayEditor({
       height: next.height,
     });
 
-    const updated = await apiPost<{ desk: DeskOverlay }>("/api/admin/desks/update", {
-      deskId: next.id,
-      label: next.label,
-      enabled: next.enabled,
-      x: round4(rect.x),
-      y: round4(rect.y),
-      width: round4(rect.width),
-      height: round4(rect.height),
-    });
+    try {
+      const updated = await apiPost<{ desk: DeskOverlay }>("/api/admin/desks/update", {
+        deskId: next.id,
+        label: next.label,
+        enabled: next.enabled,
+        x: round4(rect.x),
+        y: round4(rect.y),
+        width: round4(rect.width),
+        height: round4(rect.height),
+      });
 
-    setDesks((prev) => prev.map((d) => (d.id === updated.desk.id ? updated.desk : d)));
+      setDesks((prev) => prev.map((d) => (d.id === updated.desk.id ? updated.desk : d)));
+      setSavedById((prev) => ({ ...prev, [updated.desk.id]: updated.desk }));
+      setStatus("Saved.");
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   async function disableDesk(deskId: string) {
     setStatus(null);
     const updated = await apiPost<{ desk: DeskOverlay }>("/api/admin/desks/disable", { deskId });
     setDesks((prev) => prev.map((d) => (d.id === deskId ? updated.desk : d)));
+    setSavedById((prev) => ({ ...prev, [deskId]: updated.desk }));
   }
 
   async function enableDesk(deskId: string) {
     setStatus(null);
     const updated = await apiPost<{ desk: DeskOverlay }>("/api/admin/desks/enable", { deskId });
     setDesks((prev) => prev.map((d) => (d.id === deskId ? updated.desk : d)));
+    setSavedById((prev) => ({ ...prev, [deskId]: updated.desk }));
   }
 
   async function deleteDesk(deskId: string) {
@@ -196,6 +246,11 @@ export function DeskOverlayEditor({
     await apiPost<{ ok: true }>("/api/admin/desks/delete", { deskId });
     setDesks((prev) => prev.filter((d) => d.id !== deskId));
     setSelectedDeskId((prev) => (prev === deskId ? null : prev));
+    setSavedById((prev) => {
+      const next = { ...prev };
+      delete next[deskId];
+      return next;
+    });
   }
 
   function onBackgroundPointerDown(e: React.PointerEvent) {
@@ -403,12 +458,19 @@ export function DeskOverlayEditor({
           <SelectedDeskForm
             desk={selectedDesk}
             onChange={(next) => setDesks((prev) => prev.map((d) => (d.id === next.id ? next : d)))}
+            onSave={() =>
+              void saveDesk(selectedDesk).catch((err) => {
+                setStatus(err instanceof Error ? err.message : "Failed to save desk");
+              })
+            }
             onToggleEnabled={() =>
               void (selectedDesk.enabled ? disableDesk(selectedDesk.id) : enableDesk(selectedDesk.id)).catch((err) =>
                 setStatus(String(err)),
               )
             }
             onDelete={() => void deleteDesk(selectedDesk.id).catch((err) => setStatus(String(err)))}
+            isDirty={isDeskDirty(selectedDesk)}
+            isSaving={isSaving}
           />
         ) : (
           <p className="text-sm text-slate-600">Click a desk overlay to edit it.</p>
@@ -505,13 +567,19 @@ export function DeskOverlayEditor({
 function SelectedDeskForm({
   desk,
   onChange,
+  onSave,
   onToggleEnabled,
   onDelete,
+  isDirty,
+  isSaving,
 }: {
   desk: DeskOverlay;
   onChange: (next: DeskOverlay) => void;
+  onSave: () => void;
   onToggleEnabled: () => void;
   onDelete: () => void;
+  isDirty: boolean;
+  isSaving: boolean;
 }) {
   return (
     <div className="grid gap-3">
@@ -521,6 +589,16 @@ function SelectedDeskForm({
           className="rounded border px-3 py-2"
           value={desk.label}
           onChange={(e) => onChange({ ...desk, label: e.target.value })}
+          onBlur={() => {
+            if (!isDirty || isSaving) return;
+            onSave();
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            if (isSaving) return;
+            onSave();
+          }}
         />
       </label>
 
@@ -535,6 +613,15 @@ function SelectedDeskForm({
       </label>
 
       <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className="rounded border px-3 py-2 text-sm"
+          onClick={onSave}
+          disabled={!isDirty || isSaving}
+          title={isDirty ? "Save changes" : "No changes to save"}
+        >
+          {isSaving ? "Saving…" : "Save"}
+        </button>
         <button type="button" className="rounded border px-3 py-2 text-sm" onClick={onToggleEnabled}>
           {desk.enabled ? "Disable" : "Enable"}
         </button>
@@ -543,7 +630,11 @@ function SelectedDeskForm({
         </button>
       </div>
 
-      <p className="text-xs text-slate-600">Changes save automatically when you finish dragging/resizing.</p>
+      {isDirty ? (
+        <p className="text-xs text-slate-600">Unsaved changes. Click Save (or press Enter).</p>
+      ) : (
+        <p className="text-xs text-slate-600">All changes saved.</p>
+      )}
     </div>
   );
 }
